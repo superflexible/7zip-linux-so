@@ -1,0 +1,62 @@
+# makefile.gcc -- builds lib7za (the flat C wrapper around the 7za code base)
+# as a Linux .so or macOS .dylib.
+#
+# Linux (x64):
+#   make -f makefile.gcc -j   (uses ../../cmpl_gcc_x64.mak via the wrappers below,
+#                              or set CC/CXX yourself)
+# Simplest portable invocation on Linux:
+#   make -f makefile.gcc CC=cc CXX=c++ IS_X64=1 -j
+#   -> produces _o/lib7za.so
+#
+# macOS (clang), arm64 or x64 -- build a .dylib:
+#   make -f makefile.gcc CC=clang CXX=clang++ IS_X64=1 \
+#        SHARED_EXT=.dylib MY_LIBS="-Wl,-install_name,@rpath/lib7za.dylib" -j
+#   (use IS_ARM64=1 instead of IS_X64=1 on Apple silicon)
+#   -> produces _o/lib7za.dylib
+
+PROG = lib7za
+
+# DEF_FILE is required to trigger the shared-library link in 7zip_gcc.mak.
+# On Linux/macOS the .def content is ignored (symbols are controlled by
+# -fvisibility=hidden plus the visibility("default") attribute on Sz_* funcs);
+# on MinGW it selects which symbols the DLL exports.
+DEF_FILE = SevenZipLib.def
+NO_DEFAULT_RES = 1
+
+ifdef SystemDrive
+IS_MINGW = 1
+else
+ifdef SYSTEMDRIVE
+IS_MINGW = 1
+endif
+endif
+
+ifdef IS_MINGW
+SYS_OBJS =
+else
+SYS_OBJS = \
+  $O/MyWindows.o \
+
+endif
+
+LOCAL_FLAGS = \
+  -fvisibility=hidden \
+  -DZ7_DEFLATE_EXTRACT_ONLY \
+  -DZ7_BZIP2_EXTRACT_ONLY \
+
+CURRENT_OBJS = \
+  $O/SevenZipLib.o \
+
+include Arc7z_gcc.mak
+
+OBJS = \
+  $(ARC_OBJS) \
+  $(SYS_OBJS) \
+  $(CURRENT_OBJS) \
+
+include ../../7zip_gcc.mak
+
+# Build rule for the wrapper (7zip_gcc.mak does not know this file).
+# Placed after the include so the default goal stays "all".
+$O/SevenZipLib.o: SevenZipLib.cpp SevenZipLib.h
+	$(CXX) $(CXXFLAGS) $<

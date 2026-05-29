@@ -1,0 +1,22 @@
+EXPORTS
+  Sz_GlobalInit
+  Sz_VersionString
+  Sz_OpenFile
+  Sz_OpenFileEx
+  Sz_GetItemCount
+  Sz_GetItemPath
+  Sz_GetItemInfo
+  Sz_ExtractToFile
+  Sz_ExtractToBuffer
+  Sz_ExtractToStream
+  Sz_SetProgress
+  Sz_Close
+  Sz_ErrorString
+  Sz_CreateArchive
+  Sz_AddFile
+  Sz_AddBuffer
+  Sz_AddEmptyDir
+  Sz_Writer_AddStream
+  Sz_Writer_SetProgress
+  Sz_FinishArchive
+  Sz_AbortArchive

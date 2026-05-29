@@ -1,0 +1,9 @@
+cd CPP/7zip/Bundles/Format7zLib
+make -f ../../cmpl_gcc_x64.mak USE_ASM= -j           # build lib7za.so
+fpc -Fu. -Fl./b/g_x64 -k'-rpath=$ORIGIN/b/g_x64' test7za.pas
+
+# round-trip smoke test:
+./test7za c test.7z SevenZipLib.h README.md
+./test7za l test.7z
+./test7za x test.7z /tmp/out
+./test7za xb test.7z 0
