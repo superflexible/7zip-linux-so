@@ -8,3 +8,6 @@ Please see the original 7-Zip GitHub page
 https://github.com/ip7z/7zip
 
 and 7-Zip website: [7-zip.org](https://7-zip.org)
+
+Be sure to read the license information on the original 7-zip site:
+https://7-zip.org/faq.html
