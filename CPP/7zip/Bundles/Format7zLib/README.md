@@ -9,15 +9,15 @@ BZip2-decode and AES-256) behind a **simple flat C API** — no COM, no `BSTR`, 
 It is intended for use from Free Pascal (and any language that can call C),
 with all strings as 8-bit **UTF-8** and **cdecl** calling convention.
 
-## Scope
+## Capabilities
 
-**Read (Phase 1):** open a `.7z` archive, enumerate items, read metadata, and
-extract items to a file or to a memory buffer (password-protected archives
-supported).
-
-**Write (Phase 2):** create a `.7z` archive, adding files from disk or buffers
-from memory, with a selectable compression level and optional AES-256 content
-encryption.
+- Open a `.7z` archive from a file or a seekable stream; enumerate items and
+  read their metadata (path, size, directory flag, modification time, CRC-32).
+- Extract items to a file, a memory buffer, or a user-supplied stream.
+- Create a `.7z` archive from files on disk, in-memory buffers, or user streams,
+  with a selectable compression level (0–9).
+- AES-256 encryption of file contents, and optionally of the archive headers.
+- Progress reporting with cancellation for both extraction and creation.
 
 ## Files
 
