@@ -25,8 +25,11 @@ encryption.
 |------|---------|
 | `SevenZipLib.h`   | public C API (the contract) |
 | `SevenZipLib.cpp` | wrapper implementation (drives the in-process COM objects) |
-| `SevenZipLib.pas` | Free Pascal import unit |
+| `SevenZipLib.pas` | Free Pascal import unit (flat API) |
+| `SevenZipClasses.pas` | Free Pascal `T7zInArchive` / `T7zOutArchive` classes (migration helper) |
 | `test7za.pas`     | Free Pascal command-line test driver (list / extract / create) |
+| `test7za_features.pas` | Free Pascal self-test for progress / streaming / cancellation (no args) |
+| `test7zclasses.pas` | Free Pascal self-test for the `T7zInArchive` / `T7zOutArchive` classes (no args) |
 | `SevenZipLib.def` | export list (used by the MinGW/Windows build) |
 | `Arc7z_gcc.mak`   | reduced object list (7z-only subset of `Format7zF/Arc_gcc.mak`) |
 | `makefile.gcc`    | Linux/macOS/MinGW build |
@@ -82,7 +85,58 @@ The `O` output directory is set by the var wrapper (`b/g_x64`, `b/m_arm64`, …)
 Copy the resulting `lib7za.so` / `lib7za.dylib` next to your executable, or onto
 the loader search path / rpath.
 
-## Using from Free Pascal
+## Class-based API for migration (`SevenZipClasses.pas`)
+
+For code migrating from the COM-based `7z.dll` wrappers, `SevenZipClasses.pas`
+provides `T7zInArchive` / `T7zOutArchive` with familiar shapes, built on the
+flat API. Streams are `TStream` (not COM), callbacks are plain
+`(sender: Pointer; ...)` procedures, errors raise `E7zException`.
+
+```pascal
+uses Classes, SevenZipClasses;
+
+var arc: T7zInArchive; ms: TMemoryStream; i: Cardinal;
+begin
+  arc := T7zInArchive.Create;
+  try
+    arc.SetPassword('secret');         // optional; before OpenFile
+    arc.OpenFile('data.7z');           // or arc.OpenStream(aTStream)
+    for i := 0 to arc.NumberOfItems - 1 do
+      WriteLn(arc.ItemPath[i], '  ', arc.ItemSize[i]);
+    ms := TMemoryStream.Create;
+    arc.ExtractItem(0, ms, False);     // extract item 0 into a TStream
+    ms.Free;
+    arc.ExtractTo('/tmp/out');         // extract everything to a folder
+  finally
+    arc.Free;
+  end;
+end;
+
+var outa: T7zOutArchive;
+begin
+  outa := T7zOutArchive.Create;
+  try
+    outa.SetPassword('secret');
+    outa.EncryptHeaders := True;
+    outa.AddFile('/etc/hostname', 'hostname', 0, Default(TFileTime), Default(TFileTime), 0);
+    outa.AddFiles('/var/log', 'logs', '*.log', True);
+    outa.SaveToFile('backup.7z');      // or outa.SaveToStream(aTStream)
+  finally
+    outa.Free;
+  end;
+end;
+```
+
+Notes / adaptations from the COM unit:
+- `.7z` format only (this is the 7za code base).
+- `OpenStream`/`SaveToStream` use seekable `TStream`s (7z seeks its I/O).
+- Per-item `Attributes`, `CreationTime`, `Comment`, `IsAnti` are accepted for
+  signature compatibility but not stored by the library; size, path and
+  modification time are honoured.
+- `Add*` return the queued item's index (`T7zBatchItem = Cardinal`).
+- A `TStream` added with `soOwned` is freed by the archive after `SaveTo*`.
+
+## Using from Free Pascal (flat API)
 
 ```pascal
 uses SevenZipLib;
@@ -128,6 +182,29 @@ fpc -Fu. -Fl./b/g_x64 -k'-rpath=$ORIGIN/b/g_x64' test7za.pas
 `-Fl` adds the library search dir at link time and `-k'-rpath=...'` bakes in a
 run-time search path; alternatively set `LD_LIBRARY_PATH=./b/g_x64` when running.
 
+### Feature self-test (`test7za_features.pas`)
+
+A no-arguments test that builds archives in the current directory and checks the
+progress callbacks, `TStream` extract/add helpers, cancellation, and AES
+round-trip, printing PASS/FAIL and exiting non-zero on any failure:
+
+```sh
+fpc -Fu. -Fl./b/g_x64 -k'-rpath=$ORIGIN/b/g_x64' test7za_features.pas
+./test7za_features
+```
+
+### Class self-test (`test7zclasses.pas`)
+
+Exercises `T7zInArchive` / `T7zOutArchive`: build (AddString/AddStream/AddFile/
+AddFiles), SaveToFile and SaveToStream, OpenFile and OpenStream, item
+properties, ExtractItem (and test mode), ExtractItems, ExtractAll, ExtractTo,
+progress, cancellation, and (header) encryption.
+
+```sh
+fpc -Fu. -Fl./b/g_x64 -k'-rpath=$ORIGIN/b/g_x64' test7zclasses.pas
+./test7zclasses
+```
+
 ## API summary
 
 See `SevenZipLib.h` for the authoritative documentation. Functions return
@@ -161,8 +238,18 @@ begin
 end;
 ```
 
-Note: with a password, item **contents** are AES-256 encrypted but the archive
-**headers** (file names, sizes) are not. Header encryption can be added later.
+Note: with a password, item **contents** are AES-256 encrypted. By default the
+archive **headers** (file names, sizes) are left readable. To encrypt them too,
+call `Sz_Writer_SetHeaderEncryption(w, 1)` after `Sz_CreateArchive` (only
+effective when a password is set). With header encryption on, the archive
+cannot even be opened/listed without the correct password.
+
+```pascal
+w := Sz_CreateArchive('secret.7z', 5, 'password');
+Sz_Writer_SetHeaderEncryption(w, 1);   // encrypt names + sizes too
+Sz_AddFile(w, '/etc/hostname', 'hostname');
+Sz_FinishArchive(w);
+```
 
 ### Progress callbacks and streaming
 

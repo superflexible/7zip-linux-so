@@ -137,6 +137,95 @@ Z7_COM7F_IMF(CCallbackInStream::Read(void *data, UInt32 size, UInt32 *processedS
   return S_OK;
 }
 
+// Seekable input stream over read+seek callbacks (for Sz_OpenStream).
+Z7_CLASS_IMP_IInStream(
+  CSeekInStream
+)
+public:
+  Sz_ReadFunc ReadF;
+  Sz_SeekFunc SeekF;
+  void *Ctx;
+  bool UserError;
+  CSeekInStream() : ReadF(NULL), SeekF(NULL), Ctx(NULL), UserError(false) {}
+};
+
+Z7_COM7F_IMF(CSeekInStream::Read(void *data, UInt32 size, UInt32 *processedSize))
+{
+  UInt32 proc = 0;
+  if (ReadF && size != 0)
+    if (ReadF(Ctx, data, size, &proc) != 0)
+    {
+      UserError = true;
+      if (processedSize) *processedSize = proc;
+      return E_FAIL;
+    }
+  if (processedSize) *processedSize = proc;
+  return S_OK;
+}
+
+Z7_COM7F_IMF(CSeekInStream::Seek(Int64 offset, UInt32 seekOrigin, UInt64 *newPosition))
+{
+  UInt64 np = 0;
+  if (!SeekF)
+    return E_FAIL;
+  if (SeekF(Ctx, offset, seekOrigin, &np) != 0)
+  {
+    UserError = true;
+    return E_FAIL;
+  }
+  if (newPosition) *newPosition = np;
+  return S_OK;
+}
+
+// Seekable output stream over write+seek callbacks (for Sz_FinishArchiveToStream).
+Z7_CLASS_IMP_COM_1(
+  CSeekOutStream
+  , IOutStream
+)
+  Z7_IFACE_COM7_IMP(ISequentialOutStream)   // declares Write (base interface)
+public:
+  Sz_WriteFunc WriteF;
+  Sz_SeekFunc SeekF;
+  void *Ctx;
+  bool UserError;
+  CSeekOutStream() : WriteF(NULL), SeekF(NULL), Ctx(NULL), UserError(false) {}
+};
+
+Z7_COM7F_IMF(CSeekOutStream::Write(const void *data, UInt32 size, UInt32 *processedSize))
+{
+  UInt32 proc = 0;
+  if (WriteF && size != 0)
+    if (WriteF(Ctx, data, size, &proc) != 0 || proc != size)
+    {
+      UserError = true;
+      if (processedSize) *processedSize = proc;
+      return E_FAIL;
+    }
+  if (processedSize) *processedSize = proc;
+  return S_OK;
+}
+
+Z7_COM7F_IMF(CSeekOutStream::Seek(Int64 offset, UInt32 seekOrigin, UInt64 *newPosition))
+{
+  UInt64 np = 0;
+  if (!SeekF)
+    return E_FAIL;
+  if (SeekF(Ctx, offset, seekOrigin, &np) != 0)
+  {
+    UserError = true;
+    return E_FAIL;
+  }
+  if (newPosition) *newPosition = np;
+  return S_OK;
+}
+
+Z7_COM7F_IMF(CSeekOutStream::SetSize(UInt64 /* newSize */))
+{
+  // No-op: the destination stream grows as data is written. The final size
+  // equals the highest written offset, which is what 7z expects.
+  return S_OK;
+}
+
 // ---------------------------------------------------------------------------
 // password-aware open callback
 // ---------------------------------------------------------------------------
@@ -341,11 +430,13 @@ struct CSzWriter
   FString ArcPath;
   int Level;
   bool PasswordIsDefined;
+  bool EncryptHeader;
   UString Password;
   Sz_ProgressFunc Progress;
   void *ProgressCtx;
   CObjectVector<CSzItem> Items;
-  CSzWriter() : Level(5), PasswordIsDefined(false), Progress(NULL), ProgressCtx(NULL) {}
+  CSzWriter() : Level(5), PasswordIsDefined(false), EncryptHeader(false),
+                Progress(NULL), ProgressCtx(NULL) {}
 };
 
 class CArcUpdateCallback Z7_final:
@@ -569,6 +660,65 @@ SZ_API SzArchive SZ_CALL Sz_OpenFile(const char *utf8Path, const char *utf8Passw
   return Sz_OpenFileEx(utf8Path, utf8Password, NULL);
 }
 
+SZ_API SzArchive SZ_CALL Sz_OpenStream(Sz_ReadFunc readFn, Sz_SeekFunc seekFn, void *ctx,
+    const char *utf8Password, int *outErr)
+{
+  int err = SZA_OK;
+  SzArchive result = NULL;
+
+  if (!readFn || !seekFn)
+  {
+    if (outErr) *outErr = SZA_ERR_PARAM;
+    return NULL;
+  }
+
+  UString uPassword;
+  if (!Utf8ToUString(utf8Password, uPassword))
+  {
+    if (outErr) *outErr = SZA_ERR_PARAM;
+    return NULL;
+  }
+
+  CSzArchive *h = NULL;
+  CMyComPtr<IInArchive> archive;
+  if (CreateObject(&CLSID_Format_7z, &IID_IInArchive, (void **)&archive) != S_OK || !archive)
+  {
+    err = SZA_ERR_NOT_ARCHIVE;
+    goto done;
+  }
+
+  {
+    CSeekInStream *fileSpec = new CSeekInStream;
+    CMyComPtr<IInStream> file(fileSpec);
+    fileSpec->ReadF = readFn;
+    fileSpec->SeekF = seekFn;
+    fileSpec->Ctx = ctx;
+
+    CArcOpenCallback *openCbSpec = new CArcOpenCallback;
+    CMyComPtr<IArchiveOpenCallback> openCb(openCbSpec);
+    openCbSpec->PasswordIsDefined = (utf8Password && *utf8Password);
+    openCbSpec->Password = uPassword;
+
+    const UInt64 scanSize = 1 << 23;
+    if (archive->Open(file, &scanSize, openCb) != S_OK)
+    {
+      err = SZA_ERR_NOT_ARCHIVE;
+      goto done;
+    }
+  }
+
+  h = new CSzArchive;
+  h->Archive = archive;
+  h->PasswordIsDefined = (utf8Password && *utf8Password);
+  h->Password = uPassword;
+  result = (SzArchive)h;
+  err = SZA_OK;
+
+done:
+  if (outErr) *outErr = err;
+  return result;
+}
+
 SZ_API int SZ_CALL Sz_GetItemCount(SzArchive a, uint32_t *count)
 {
   CSzArchive *h = (CSzArchive *)a;
@@ -783,6 +933,17 @@ SZ_API void SZ_CALL Sz_SetProgress(SzArchive a, Sz_ProgressFunc cb, void *ctx)
   h->ProgressCtx = ctx;
 }
 
+SZ_API void SZ_CALL Sz_SetPassword(SzArchive a, const char *utf8Password)
+{
+  CSzArchive *h = (CSzArchive *)a;
+  if (!h)
+    return;
+  UString u;
+  Utf8ToUString(utf8Password, u);
+  h->Password = u;
+  h->PasswordIsDefined = (utf8Password && *utf8Password);
+}
+
 SZ_API int SZ_CALL Sz_ExtractToStream(SzArchive a, uint32_t index, Sz_WriteFunc writeFn, void *ctx)
 {
   CSzArchive *h = (CSzArchive *)a;
@@ -823,9 +984,7 @@ SZ_API void SZ_CALL Sz_Close(SzArchive a)
 
 SZ_API SzWriter SZ_CALL Sz_CreateArchive(const char *utf8Path, int level, const char *utf8Password)
 {
-  if (!utf8Path || !*utf8Path)
-    return NULL;
-
+  // utf8Path may be NULL/"" when finishing via Sz_FinishArchiveToFile/Stream.
   UString uPath, uPassword;
   if (!Utf8ToUString(utf8Path, uPath) || !Utf8ToUString(utf8Password, uPassword))
     return NULL;
@@ -952,61 +1111,133 @@ SZ_API void SZ_CALL Sz_Writer_SetProgress(SzWriter wr, Sz_ProgressFunc cb, void 
   w->ProgressCtx = ctx;
 }
 
+SZ_API void SZ_CALL Sz_Writer_SetHeaderEncryption(SzWriter wr, int enable)
+{
+  CSzWriter *w = (CSzWriter *)wr;
+  if (!w)
+    return;
+  w->EncryptHeader = (enable != 0);
+}
+
+SZ_API void SZ_CALL Sz_Writer_SetLevel(SzWriter wr, int level)
+{
+  CSzWriter *w = (CSzWriter *)wr;
+  if (!w)
+    return;
+  if (level < 0) level = 0;
+  if (level > 9) level = 9;
+  w->Level = level;
+}
+
+SZ_API void SZ_CALL Sz_Writer_SetPassword(SzWriter wr, const char *utf8Password)
+{
+  CSzWriter *w = (CSzWriter *)wr;
+  if (!w)
+    return;
+  UString u;
+  Utf8ToUString(utf8Password, u);
+  w->Password = u;
+  w->PasswordIsDefined = (utf8Password && *utf8Password);
+}
+
+// Runs the 7z update writing to a (seekable) output stream. Does not free w.
+static int RunUpdate(CSzWriter *w, IOutStream *outStream)
+{
+  CMyComPtr<IOutArchive> outArchive;
+  if (CreateObject(&CLSID_Format_7z, &IID_IOutArchive, (void **)&outArchive) != S_OK || !outArchive)
+    return SZA_ERR_UPDATE;
+
+  // archive properties: compression level, optional header encryption
+  {
+    const wchar_t *names[2];
+    NCOM::CPropVariant values[2];
+    UInt32 numProps = 0;
+    names[numProps] = L"x";
+    values[numProps] = (UInt32)w->Level;
+    numProps++;
+    if (w->EncryptHeader && w->PasswordIsDefined)
+    {
+      names[numProps] = L"he";   // encrypt headers (file names, sizes, ...)
+      values[numProps] = true;
+      numProps++;
+    }
+    CMyComPtr<ISetProperties> setProperties;
+    outArchive->QueryInterface(IID_ISetProperties, (void **)&setProperties);
+    if (setProperties)
+      setProperties->SetProperties(names, values, numProps);
+  }
+
+  CArcUpdateCallback *cbSpec = new CArcUpdateCallback;
+  CMyComPtr<IArchiveUpdateCallback2> cb(cbSpec);
+  cbSpec->Items = &w->Items;
+  cbSpec->PasswordIsDefined = w->PasswordIsDefined;
+  cbSpec->Password = w->Password;
+  cbSpec->Progress = w->Progress;
+  cbSpec->ProgressCtx = w->ProgressCtx;
+
+  const HRESULT hr = outArchive->UpdateItems(outStream, w->Items.Size(), cb);
+  if (cbSpec->Cancelled)
+    return SZA_ERR_CANCELLED;
+  if (hr != S_OK || cbSpec->Failed)
+    return SZA_ERR_UPDATE;
+  return SZA_OK;
+}
+
+static int FinishToFilePath(CSzWriter *w, const FString &path)
+{
+  COutFileStream *outSpec = new COutFileStream;
+  CMyComPtr<IOutStream> outFile(outSpec);
+  if (!outSpec->Create_ALWAYS(path))
+    return SZA_ERR_CREATE_FILE;
+  const int r = RunUpdate(w, outFile);
+  outSpec->Close();
+  return r;
+}
+
 SZ_API int SZ_CALL Sz_FinishArchive(SzWriter wr)
 {
   CSzWriter *w = (CSzWriter *)wr;
   if (!w)
     return SZA_ERR_PARAM;
-
-  int result = SZA_OK;
-
-  CMyComPtr<IOutArchive> outArchive;
-  if (CreateObject(&CLSID_Format_7z, &IID_IOutArchive, (void **)&outArchive) != S_OK || !outArchive)
-  {
-    result = SZA_ERR_UPDATE;
-    goto cleanup;
-  }
-
-  // compression level
-  {
-    const wchar_t * const names[1] = { L"x" };
-    NCOM::CPropVariant values[1];
-    values[0] = (UInt32)w->Level;
-    CMyComPtr<ISetProperties> setProperties;
-    outArchive->QueryInterface(IID_ISetProperties, (void **)&setProperties);
-    if (setProperties)
-      setProperties->SetProperties(names, values, 1);
-  }
-
-  {
-    COutFileStream *outSpec = new COutFileStream;
-    CMyComPtr<IOutStream> outFile(outSpec);
-    if (!outSpec->Create_ALWAYS(w->ArcPath))
-    {
-      result = SZA_ERR_CREATE_FILE;
-      goto cleanup;
-    }
-
-    CArcUpdateCallback *cbSpec = new CArcUpdateCallback;
-    CMyComPtr<IArchiveUpdateCallback2> cb(cbSpec);
-    cbSpec->Items = &w->Items;
-    cbSpec->PasswordIsDefined = w->PasswordIsDefined;
-    cbSpec->Password = w->Password;
-    cbSpec->Progress = w->Progress;
-    cbSpec->ProgressCtx = w->ProgressCtx;
-
-    const HRESULT hr = outArchive->UpdateItems(outFile, w->Items.Size(), cb);
-    outSpec->Close();
-
-    if (cbSpec->Cancelled)
-      result = SZA_ERR_CANCELLED;
-    else if (hr != S_OK || cbSpec->Failed)
-      result = SZA_ERR_UPDATE;
-  }
-
-cleanup:
+  const int r = FinishToFilePath(w, w->ArcPath);
   delete w;
-  return result;
+  return r;
+}
+
+SZ_API int SZ_CALL Sz_FinishArchiveToFile(SzWriter wr, const char *utf8Path)
+{
+  CSzWriter *w = (CSzWriter *)wr;
+  if (!w || !utf8Path || !*utf8Path)
+    return SZA_ERR_PARAM;
+  UString u;
+  if (!Utf8ToUString(utf8Path, u))
+  {
+    delete w;
+    return SZA_ERR_PARAM;
+  }
+  const int r = FinishToFilePath(w, us2fs(u));
+  delete w;
+  return r;
+}
+
+SZ_API int SZ_CALL Sz_FinishArchiveToStream(SzWriter wr, Sz_WriteFunc writeFn, Sz_SeekFunc seekFn, void *ctx)
+{
+  CSzWriter *w = (CSzWriter *)wr;
+  if (!w || !writeFn || !seekFn)
+  {
+    if (w) delete w;
+    return SZA_ERR_PARAM;
+  }
+  CSeekOutStream *outSpec = new CSeekOutStream;
+  CMyComPtr<IOutStream> outStream(outSpec);
+  outSpec->WriteF = writeFn;
+  outSpec->SeekF = seekFn;
+  outSpec->Ctx = ctx;
+  int r = RunUpdate(w, outStream);
+  if (r == SZA_ERR_UPDATE && outSpec->UserError)
+    r = SZA_ERR_STREAM;
+  delete w;
+  return r;
 }
 
 SZ_API void SZ_CALL Sz_AbortArchive(SzWriter wr)

@@ -72,6 +72,11 @@ typedef int (SZ_CALL *Sz_WriteFunc)(void *ctx, const void *data, uint32_t size, 
    success, non-zero on error. */
 typedef int (SZ_CALL *Sz_ReadFunc)(void *ctx, void *data, uint32_t size, uint32_t *processed);
 
+/* Seek for a seekable stream (Sz_OpenStream / Sz_FinishArchiveToStream).
+   origin: 0 = from start, 1 = from current, 2 = from end. Set *newPos to the
+   resulting absolute position. Return 0 on success, non-zero on error. */
+typedef int (SZ_CALL *Sz_SeekFunc)(void *ctx, int64_t offset, uint32_t origin, uint64_t *newPos);
+
 /* Optional one-time initialisation. The library self-initialises on load, so
    calling this is not strictly required, but it is a convenient way to verify
    the library loaded correctly. Always returns SZA_OK. */
@@ -89,6 +94,11 @@ SZ_API SzArchive SZ_CALL Sz_OpenFile(const char *utf8Path, const char *utf8Passw
 /* Same as Sz_OpenFile but reports a detailed error code via *outErr
    (outErr may be NULL). On failure returns NULL. */
 SZ_API SzArchive SZ_CALL Sz_OpenFileEx(const char *utf8Path, const char *utf8Password, int *outErr);
+
+/* Opens an archive from a seekable user stream (read + seek callbacks). The
+   callbacks and ctx must stay valid until Sz_Close. *outErr may be NULL. */
+SZ_API SzArchive SZ_CALL Sz_OpenStream(Sz_ReadFunc readFn, Sz_SeekFunc seekFn, void *ctx,
+    const char *utf8Password, int *outErr);
 
 /* Number of items (files and folders) in the archive. */
 SZ_API int SZ_CALL Sz_GetItemCount(SzArchive a, uint32_t *count);
@@ -120,6 +130,11 @@ SZ_API int SZ_CALL Sz_ExtractToFile(SzArchive a, uint32_t index, const char *utf
 /* Registers a progress callback used by subsequent extractions on this
    archive handle. Pass cb = NULL to disable. ctx is passed back unchanged. */
 SZ_API void SZ_CALL Sz_SetProgress(SzArchive a, Sz_ProgressFunc cb, void *ctx);
+
+/* Sets (or clears, with NULL/"") the password used for extracting from this
+   archive. Useful when an archive with readable headers but encrypted content
+   was opened without a password. */
+SZ_API void SZ_CALL Sz_SetPassword(SzArchive a, const char *utf8Password);
 
 /* Extracts one item, delivering its uncompressed bytes to a user write
    callback (e.g. wrapping a stream). */
@@ -161,12 +176,18 @@ SZ_API const char * SZ_CALL Sz_ErrorString(int code);
 typedef void *SzWriter;
 
 /* Begins a new .7z archive.
-     utf8Path     : destination file (created/overwritten on Sz_FinishArchive)
+     utf8Path     : destination file used by Sz_FinishArchive; may be NULL/""
+                    if you intend to finish with Sz_FinishArchiveToFile or
+                    Sz_FinishArchiveToStream instead
      level        : compression level 0..9 (0 = store, 9 = ultra); clamped
      utf8Password : NULL/"" for none; otherwise the file contents are AES-256
-                    encrypted (archive headers / names are NOT encrypted)
+                    encrypted (see Sz_Writer_SetHeaderEncryption for headers)
    Returns a writer handle, or NULL on invalid arguments. */
 SZ_API SzWriter SZ_CALL Sz_CreateArchive(const char *utf8Path, int level, const char *utf8Password);
+
+/* Overrides the compression level / password after creation (before finish). */
+SZ_API void SZ_CALL Sz_Writer_SetLevel(SzWriter w, int level);
+SZ_API void SZ_CALL Sz_Writer_SetPassword(SzWriter w, const char *utf8Password);
 
 /* Queues a file (or an empty directory) from disk for addition.
    utf8NameInArchive is the path the item will have inside the archive; if NULL
@@ -195,9 +216,23 @@ SZ_API int SZ_CALL Sz_Writer_AddStream(SzWriter w, const char *utf8NameInArchive
    disable. */
 SZ_API void SZ_CALL Sz_Writer_SetProgress(SzWriter w, Sz_ProgressFunc cb, void *ctx);
 
+/* Enables (enable != 0) or disables encryption of the archive headers
+   (file names, sizes, structure) in addition to the file contents. Only takes
+   effect when the archive was created with a password. Off by default. */
+SZ_API void SZ_CALL Sz_Writer_SetHeaderEncryption(SzWriter w, int enable);
+
 /* Compresses all queued items, writes the archive to disk and frees the
-   writer (valid or not, the handle must not be used afterwards). */
+   writer (valid or not, the handle must not be used afterwards). All three
+   Finish variants free the writer. */
 SZ_API int SZ_CALL Sz_FinishArchive(SzWriter w);
+
+/* Like Sz_FinishArchive but writes to the given path (ignores the path passed
+   to Sz_CreateArchive). */
+SZ_API int SZ_CALL Sz_FinishArchiveToFile(SzWriter w, const char *utf8Path);
+
+/* Like Sz_FinishArchive but writes the archive to a seekable user stream
+   (write + seek callbacks). 7z needs to seek the output, so both are required. */
+SZ_API int SZ_CALL Sz_FinishArchiveToStream(SzWriter w, Sz_WriteFunc writeFn, Sz_SeekFunc seekFn, void *ctx);
 
 /* Discards a writer without writing anything. Passing NULL is a no-op. */
 SZ_API void SZ_CALL Sz_AbortArchive(SzWriter w);

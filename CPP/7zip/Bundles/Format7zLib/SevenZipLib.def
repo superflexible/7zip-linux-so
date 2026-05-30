@@ -3,6 +3,7 @@ EXPORTS
   Sz_VersionString
   Sz_OpenFile
   Sz_OpenFileEx
+  Sz_OpenStream
   Sz_GetItemCount
   Sz_GetItemPath
   Sz_GetItemInfo
@@ -10,13 +11,19 @@ EXPORTS
   Sz_ExtractToBuffer
   Sz_ExtractToStream
   Sz_SetProgress
+  Sz_SetPassword
   Sz_Close
   Sz_ErrorString
   Sz_CreateArchive
+  Sz_Writer_SetLevel
+  Sz_Writer_SetPassword
   Sz_AddFile
   Sz_AddBuffer
   Sz_AddEmptyDir
   Sz_Writer_AddStream
   Sz_Writer_SetProgress
+  Sz_Writer_SetHeaderEncryption
   Sz_FinishArchive
+  Sz_FinishArchiveToFile
+  Sz_FinishArchiveToStream
   Sz_AbortArchive

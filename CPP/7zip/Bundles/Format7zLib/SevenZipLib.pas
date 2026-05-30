@@ -56,6 +56,8 @@ type
   TSzProgressFunc = function(ctx: Pointer; completed, total: QWord): LongInt; cdecl;
   TSzWriteFunc    = function(ctx: Pointer; data: Pointer; size: LongWord; processed: PLongWord): LongInt; cdecl;
   TSzReadFunc     = function(ctx: Pointer; data: Pointer; size: LongWord; processed: PLongWord): LongInt; cdecl;
+  { origin: 0 = from start, 1 = from current, 2 = from end }
+  TSzSeekFunc     = function(ctx: Pointer; offset: Int64; origin: LongWord; newPos: PQWord): LongInt; cdecl;
 
 function Sz_GlobalInit: LongInt; cdecl;
   external SevenZipLibName name 'Sz_GlobalInit';
@@ -68,6 +70,10 @@ function Sz_OpenFile(utf8Path, utf8Password: PAnsiChar): TSzArchive; cdecl;
 
 function Sz_OpenFileEx(utf8Path, utf8Password: PAnsiChar; outErr: PLongInt): TSzArchive; cdecl;
   external SevenZipLibName name 'Sz_OpenFileEx';
+
+function Sz_OpenStream(readFn: TSzReadFunc; seekFn: TSzSeekFunc; ctx: Pointer;
+  utf8Password: PAnsiChar; outErr: PLongInt): TSzArchive; cdecl;
+  external SevenZipLibName name 'Sz_OpenStream';
 
 function Sz_GetItemCount(a: TSzArchive; out count: LongWord): LongInt; cdecl;
   external SevenZipLibName name 'Sz_GetItemCount';
@@ -91,6 +97,9 @@ function Sz_ExtractToBuffer(a: TSzArchive; index: LongWord;
 procedure Sz_SetProgress(a: TSzArchive; cb: TSzProgressFunc; ctx: Pointer); cdecl;
   external SevenZipLibName name 'Sz_SetProgress';
 
+procedure Sz_SetPassword(a: TSzArchive; utf8Password: PAnsiChar); cdecl;
+  external SevenZipLibName name 'Sz_SetPassword';
+
 function Sz_ExtractToStream(a: TSzArchive; index: LongWord;
   writeFn: TSzWriteFunc; ctx: Pointer): LongInt; cdecl;
   external SevenZipLibName name 'Sz_ExtractToStream';
@@ -105,6 +114,12 @@ function Sz_ErrorString(code: LongInt): PAnsiChar; cdecl;
 
 function Sz_CreateArchive(utf8Path: PAnsiChar; level: LongInt; utf8Password: PAnsiChar): TSzWriter; cdecl;
   external SevenZipLibName name 'Sz_CreateArchive';
+
+procedure Sz_Writer_SetLevel(w: TSzWriter; level: LongInt); cdecl;
+  external SevenZipLibName name 'Sz_Writer_SetLevel';
+
+procedure Sz_Writer_SetPassword(w: TSzWriter; utf8Password: PAnsiChar); cdecl;
+  external SevenZipLibName name 'Sz_Writer_SetPassword';
 
 function Sz_AddFile(w: TSzWriter; utf8SrcPath, utf8NameInArchive: PAnsiChar): LongInt; cdecl;
   external SevenZipLibName name 'Sz_AddFile';
@@ -123,8 +138,19 @@ function Sz_Writer_AddStream(w: TSzWriter; utf8NameInArchive: PAnsiChar;
 procedure Sz_Writer_SetProgress(w: TSzWriter; cb: TSzProgressFunc; ctx: Pointer); cdecl;
   external SevenZipLibName name 'Sz_Writer_SetProgress';
 
+{ Encrypt archive headers (names/sizes) too; only effective with a password. }
+procedure Sz_Writer_SetHeaderEncryption(w: TSzWriter; enable: LongInt); cdecl;
+  external SevenZipLibName name 'Sz_Writer_SetHeaderEncryption';
+
 function Sz_FinishArchive(w: TSzWriter): LongInt; cdecl;
   external SevenZipLibName name 'Sz_FinishArchive';
+
+function Sz_FinishArchiveToFile(w: TSzWriter; utf8Path: PAnsiChar): LongInt; cdecl;
+  external SevenZipLibName name 'Sz_FinishArchiveToFile';
+
+function Sz_FinishArchiveToStream(w: TSzWriter; writeFn: TSzWriteFunc;
+  seekFn: TSzSeekFunc; ctx: Pointer): LongInt; cdecl;
+  external SevenZipLibName name 'Sz_FinishArchiveToStream';
 
 procedure Sz_AbortArchive(w: TSzWriter); cdecl;
   external SevenZipLibName name 'Sz_AbortArchive';
