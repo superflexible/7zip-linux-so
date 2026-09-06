@@ -70,13 +70,21 @@ static void UStringToUtf8(const UString &s, AString &dest)
 }
 
 // FILETIME (100-ns ticks since 1601-01-01) -> Unix seconds.
+// 116444736000000000 = ticks between 1601-01-01 and 1970-01-01.  It is written
+// as a product rather than as a ULL literal so the file also builds under the
+// strict macOS warn set (cmpl_mac_*.mak -> -Weverything -Werror, which enables
+// -Wc++98-compat-pedantic: a long long literal is a C++98 extension); same
+// style as NTime in ../../../Windows/TimeUtils.cpp.
+static const UInt32 kNumTimeQuantumsInSecond = 10000000;
+static const UInt64 kUnixTimeOffsetInQuantums =
+    (UInt64)60 * 60 * 24 * (89 + 365 * (UInt32)(1970 - 1601)) * kNumTimeQuantumsInSecond;
+
 static int64_t FileTimeToUnix(const FILETIME &ft)
 {
   const UInt64 t = ((UInt64)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
-  // 116444736000000000 = ticks between 1601-01-01 and 1970-01-01
-  if (t < (UInt64)116444736000000000ULL)
+  if (t < kUnixTimeOffsetInQuantums)
     return 0;
-  return (int64_t)((t - (UInt64)116444736000000000ULL) / 10000000ULL);
+  return (int64_t)((t - kUnixTimeOffsetInQuantums) / kNumTimeQuantumsInSecond);
 }
 
 // ---------------------------------------------------------------------------

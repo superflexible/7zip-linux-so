@@ -74,15 +74,28 @@ With clang, use the `cmpl_clang_*.mak` wrappers.
 
 ```sh
 # Apple silicon:
-make -f ../../cmpl_mac_arm64.mak USE_ASM= \
-     SHARED_EXT=.dylib MY_LIBS="-Wl,-install_name,@rpath/lib7za.dylib" -j
+make -f ../../cmpl_mac_arm64.mak USE_ASM= -j
 # -> b/m_arm64/lib7za.dylib
 
 # Intel:
-make -f ../../cmpl_mac_x64.mak USE_ASM= \
-     SHARED_EXT=.dylib MY_LIBS="-Wl,-install_name,@rpath/lib7za.dylib" -j
+make -f ../../cmpl_mac_x64.mak USE_ASM= -j
 # -> b/m_x64/lib7za.dylib
 ```
+
+`makefile.gcc` detects Darwin and switches the output extension to `.dylib` and
+adds `-Wl,-install_name,@rpath/lib7za.dylib` by itself, so no extra variables
+are needed. Both matter:
+
+- The library **must** be called `lib7za.dylib` on macOS. `SevenZipLib.pas`
+  imports from that name, and the Apple linker only looks for `lib<name>.dylib`
+  / `lib<name>.a` — a macOS build named `lib7za.so` is silently not found and
+  every `Sz_*` import ends up as `Undefined symbols for architecture arm64`.
+- Without `-install_name`, the library records its own build path (e.g.
+  `_o/lib7za.so`), and `dyld` fails to load it once it has been copied
+  somewhere else.
+
+If you build with plain `make -f makefile.gcc -j` instead of a wrapper, the
+output is `_o/lib7za.dylib` and the same two settings apply.
 
 ### Windows (MinGW) — optional
 
@@ -178,6 +191,11 @@ end;
 Make sure FPC can locate the shared library at run time (same directory as the
 binary, `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`, or an rpath).
 
+On Darwin the unit additionally carries `{$LINKLIB 7za}`: FPC 3.2.x ignores the
+library name given in `external '<lib>'` when it builds the macOS linker command
+(it emits no `-l` flag at all), so without that directive every `Sz_*` import
+fails to link even when the `.dylib` is right there.
+
 ### Command-line test driver (`test7za.pas`)
 
 ```sh
@@ -195,6 +213,26 @@ fpc -Fu. -Fl./b/g_x64 -k'-rpath=$ORIGIN/b/g_x64' test7za.pas
 
 `-Fl` adds the library search dir at link time and `-k'-rpath=...'` bakes in a
 run-time search path; alternatively set `LD_LIBRARY_PATH=./b/g_x64` when running.
+
+On macOS the rpath spelling differs (`@executable_path` instead of `$ORIGIN`,
+and `-rpath` takes its argument as a separate token). The same three programs
+build with:
+
+```sh
+fpc -Fu. -Fl./b/m_arm64 -k-rpath -k'@executable_path/b/m_arm64' test7za.pas
+fpc -Fu. -Fl./b/m_arm64 -k-rpath -k'@executable_path/b/m_arm64' test7za_features.pas
+fpc -Fu. -Fl./b/m_arm64 -k-rpath -k'@executable_path/b/m_arm64' test7zclasses.pas
+```
+
+Or, with `lib7za.dylib` simply copied next to the binary:
+
+```sh
+fpc -k-rpath -k@executable_path test7za.pas
+```
+
+`ld: warning: dylib ... was built for newer macOS version (12.0) than being
+linked (11.0)` is harmless; add `-WM12.0` to silence it. Alternatively set
+`DYLD_LIBRARY_PATH` instead of using an rpath.
 
 ### Feature self-test (`test7za_features.pas`)
 

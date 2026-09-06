@@ -23,18 +23,16 @@ interface
 
 uses
   {$IFDEF WINDOWS}Windows,{$ENDIF}
-  SysUtils, Classes, SevenZipLib;
+  SysUtils, Classes, Types, SevenZipLib;
 
 type
   E7zException = class(Exception);
 
 {$IFNDEF WINDOWS}
-  { Windows provides TFileTime; define a compatible record elsewhere so that
-    code migrated from the COM wrapper keeps compiling. }
-  TFileTime = record
-    dwLowDateTime: LongWord;
-    dwHighDateTime: LongWord;
-  end;
+  { Windows provides TFileTime; elsewhere reuse the RTL's identical record so
+    that code migrated from the COM wrapper keeps compiling *and* stays type
+    compatible with the TFileTime the rest of the application passes around. }
+  TFileTime = Types.TFileTime;
 {$ENDIF}
 
   { An item handle returned by the T7zOutArchive.Add* methods. With lib7za this
@@ -110,6 +108,9 @@ type
     FProgSender: Pointer;
     FProgCallback: T7zProgressCallback;
     FLastTotal: Int64;
+    FLevel: LongInt;                // remembered across ClearBatch
+    FPassword: UnicodeString;
+    FEncryptHeaders: Boolean;
     procedure NeedWriter;
     procedure NewWriter;
     function DoProgress(completed, total: QWord): LongInt;
@@ -132,6 +133,8 @@ type
     procedure SetProgressCallback(sender: Pointer; callback: T7zProgressCallback);
     procedure ClearBatch;
     procedure SetPassword(const password: UnicodeString);
+    { 0 = store, 1..9 = increasing LZMA compression }
+    procedure SetCompressionLevel(level: Integer);
     property EncryptHeaders: Boolean write SetEncryptHeaders;
   end;
 
@@ -164,6 +167,15 @@ procedure RaiseIf(rc: LongInt; const where: string);
 begin
   if rc <> SZA_OK then
     raise E7zException.CreateFmt('%s: %s', [where, Sz_ErrorString(rc)]);
+end;
+
+{ Call before the first use of any Sz_* entry point. With SEVENZIPDYNAMIC this
+  is what triggers the (late) load of the library; without it, it does nothing. }
+procedure NeedLibrary;
+begin
+  if not SevenZipLibAvailable then
+    raise E7zException.CreateFmt('cannot load the 7-Zip library %s: %s',
+      [SevenZipLibName, SevenZipLibLoadError]);
 end;
 
 { ---------- cdecl trampolines (ctx -> object / TStream) ---------- }
@@ -289,6 +301,7 @@ var
   pwu: RawByteString;
   pwp: PAnsiChar;
 begin
+  NeedLibrary;
   Close;
   ResolvePassword;
   pwp := nil;
@@ -306,6 +319,7 @@ var
   pwu: RawByteString;
   pwp: PAnsiChar;
 begin
+  NeedLibrary;
   Close;
   ResolvePassword;
   pwp := nil;
@@ -480,6 +494,7 @@ constructor T7zOutArchive.Create;
 begin
   inherited Create;
   FOwned := TList.Create;
+  FLevel := 5;
   NewWriter;
 end;
 
@@ -495,10 +510,19 @@ end;
 
 procedure T7zOutArchive.NewWriter;
 begin
-  FWriter := Sz_CreateArchive(nil, 5, nil);   // path supplied at SaveTo*
+  NeedLibrary;
+  FWriter := Sz_CreateArchive(nil, FLevel, nil);   // path supplied at SaveTo*
   if FWriter = nil then
     raise E7zException.Create('cannot create archive writer');
   FItemCount := 0;
+  { re-apply the settings; a writer created by ClearBatch must behave like the
+    one the caller configured }
+  if FPassword <> '' then
+  begin
+    Sz_Writer_SetPassword(FWriter, PAnsiChar(ToUtf8(FPassword)));
+    if FEncryptHeaders then
+      Sz_Writer_SetHeaderEncryption(FWriter, 1);
+  end;
   if Assigned(FProgCallback) then
     Sz_Writer_SetProgress(FWriter, @OutProgressThunk, Self);
 end;
@@ -669,12 +693,23 @@ end;
 procedure T7zOutArchive.SetPassword(const password: UnicodeString);
 begin
   NeedWriter;
+  FPassword := password;
   Sz_Writer_SetPassword(FWriter, PAnsiChar(ToUtf8(password)));
+end;
+
+procedure T7zOutArchive.SetCompressionLevel(level: Integer);
+begin
+  NeedWriter;
+  if level < 0 then level := 0;
+  if level > 9 then level := 9;
+  FLevel := level;
+  Sz_Writer_SetLevel(FWriter, FLevel);
 end;
 
 procedure T7zOutArchive.SetEncryptHeaders(value: Boolean);
 begin
   NeedWriter;
+  FEncryptHeaders := value;
   if value then
     Sz_Writer_SetHeaderEncryption(FWriter, 1)
   else

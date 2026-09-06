@@ -9,10 +9,13 @@
 #   -> produces _o/lib7za.so
 #
 # macOS (clang), arm64 or x64 -- build a .dylib:
-#   make -f makefile.gcc CC=clang CXX=clang++ IS_X64=1 \
-#        SHARED_EXT=.dylib MY_LIBS="-Wl,-install_name,@rpath/lib7za.dylib" -j
-#   (use IS_ARM64=1 instead of IS_X64=1 on Apple silicon)
+#   make -f makefile.gcc IS_ARM64=1 -j      (Apple silicon)
+#   make -f makefile.gcc IS_X64=1 -j        (Intel)
 #   -> produces _o/lib7za.dylib
+#   The .dylib extension and -install_name @rpath/lib7za.dylib are applied
+#   automatically on Darwin (see the uname block at the end of this file);
+#   do not build a macOS library named lib7za.so -- SevenZipLib.pas links
+#   against lib7za.dylib there.
 
 PROG = lib7za
 
@@ -55,6 +58,17 @@ OBJS = \
   $(CURRENT_OBJS) \
 
 include ../../7zip_gcc.mak
+
+# macOS: 7zip_gcc.mak hardcodes SHARED_EXT=.so and emits no -install_name for
+# every non-MinGW target.  Both are wrong for Darwin: a Mach-O library must be
+# called lib7za.dylib (that is the name SevenZipLib.pas and the FPC linker
+# expect), and without an -install_name the library records its own build path
+# (_o/lib7za.so), so dyld cannot find it once it is copied elsewhere.
+# These assignments come after the include, so they win over the ones there.
+ifeq ($(shell uname -s),Darwin)
+SHARED_EXT = .dylib
+MY_LIBS += -Wl,-install_name,@rpath/$(PROG).dylib
+endif
 
 # Build rule for the wrapper (7zip_gcc.mak does not know this file).
 # Placed after the include so the default goal stays "all".

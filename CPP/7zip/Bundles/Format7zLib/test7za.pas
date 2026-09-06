@@ -204,6 +204,13 @@ end;
 var
   cmd: string;
 begin
+  { With -dSEVENZIPDYNAMIC the Sz_* entry points are nil until the library has
+    been dlopen'ed; without it this call is a no-op that returns True. }
+  if not SevenZipLibAvailable then
+  begin
+    WriteLn(StdErr, 'cannot load ', SevenZipLibName, ': ', SevenZipLibLoadError);
+    Halt(2);
+  end;
   Sz_GlobalInit;
   if ParamCount < 1 then
     Usage;
