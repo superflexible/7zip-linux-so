@@ -1,0 +1,20 @@
+# Build output of this bundle only.
+#
+# The gcc/clang wrappers (../../cmpl_gcc_*.mak, ../../cmpl_clang_*.mak) put
+# their objects and the shared library in b/<target>/; a plain
+# "make -f makefile.gcc" uses _o/ instead.
+/b/
+/_o/
+lib7za.so
+lib7za.dylib
+lib7za.dll
+
+# Free Pascal test drivers and their intermediates, built next to the sources.
+/test7za
+/test7za_features
+/test7zclasses
+*.o
+*.ppu
+linkfiles*.res
+symbol_order*.fpc
+ppas.sh
